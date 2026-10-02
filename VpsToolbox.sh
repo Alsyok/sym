@@ -47,7 +47,7 @@ load_ip() {
         return
     fi
 
-    local ipv4 ipv6 region family
+    local ipv4 ipv6 region country family
 
     printf '  正在查询公网地址和地区，请稍候…\n'
 
@@ -65,8 +65,7 @@ load_ip() {
         PUBLIC_IPV6="$ipv6"
     fi
 
-    # 查询服务返回纯文本地区信息
-    # 优先通过 IPv4，失败后尝试 IPv6
+    # 优先查询 IPv4 出口地区，失败后尝试 IPv6
     for family in -4 -6; do
         region=$(curl "$family" -fsS \
             --connect-timeout 3 --max-time 6 \
@@ -74,16 +73,28 @@ load_ip() {
 
         region="${region//$'\r'/}"
 
-        # 拒绝空内容、HTML 和 JSON 错误响应
-        if [[ -n "$region" &&
-              ${#region} -le 120 &&
-              "$region" != *$'\n'* &&
-              "$region" != *'<'* &&
-              "$region" != *'{'* &&
-              "$region" != *'}'* ]]; then
-            IP_REGION="$region"
-            break
+        if [[ -z "$region" ||
+              ${#region} -gt 120 ||
+              "$region" == *$'\n'* ||
+              "$region" == *'<'* ||
+              "$region" == *'{'* ||
+              "$region" == *'}'* ]]; then
+            continue
         fi
+
+        country=$(curl "$family" -fsS \
+            --connect-timeout 3 --max-time 6 \
+            https://ipinfo.io/country 2>/dev/null)
+
+        country="${country//$'\r'/}"
+
+        if [[ "$country" =~ ^[A-Z]{2}$ ]]; then
+            IP_REGION="$region / $country"
+        else
+            IP_REGION="$region / 国家未获取"
+        fi
+
+        break
     done
 }
 
@@ -110,19 +121,27 @@ show_summary() {
     memory=$(free -m 2>/dev/null |
         awk '/^Mem:/ {printf "%s / %s MiB", $3, $2}')
 
-    # -P 避免文件系统名称过长导致换行
+    # -P 保证文件系统信息不换行，兼容 Alpine
     disk=$(df -Ph / 2>/dev/null |
         awk 'NR==2 && NF>=6 {
             printf "%s / %s（%s）", $3, $2, $5
         }')
 
-    printf '  系统      %s\n' "$system_name"
-    printf '  CPU       %s 核\n' "${cpu_count:-未知}"
-    printf '  内存      %s\n' "${memory:-未获取}"
-    printf '  根分区    %s\n' "${disk:-未获取}"
-    printf '  公网 IPv4 %s\n' "$PUBLIC_IP"
-    printf '  公网 IPv6 %s\n' "$PUBLIC_IPV6"
-    printf '  IP 地区   %s\n' "$IP_REGION"
+    # 标签均占 10 个显示位置，右侧内容统一起点
+    printf '  %s系统      %s%s\n' \
+        "$CYAN" "$RESET" "$system_name"
+    printf '  %sCPU       %s%s 核\n' \
+        "$CYAN" "$RESET" "${cpu_count:-未知}"
+    printf '  %s内存      %s%s\n' \
+        "$CYAN" "$RESET" "${memory:-未获取}"
+    printf '  %s根分区    %s%s\n' \
+        "$CYAN" "$RESET" "${disk:-未获取}"
+    printf '  %s公网 IPv4 %s%s\n' \
+        "$CYAN" "$RESET" "$PUBLIC_IP"
+    printf '  %s公网 IPv6 %s%s\n' \
+        "$CYAN" "$RESET" "$PUBLIC_IPV6"
+    printf '  %sIP 地区   %s%s\n' \
+        "$CYAN" "$RESET" "$IP_REGION"
 }
 
 # ========= 系统信息子菜单 =========
@@ -248,7 +267,7 @@ load_ip
 
 # ========= 主菜单 =========
 while true; do
-    page "VPS TOOLBOX · 服务器工具箱 v0.2"
+    page "VPS TOOLBOX · 服务器工具箱 v0.3"
 
     show_summary
     line
