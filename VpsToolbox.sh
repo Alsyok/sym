@@ -1,1 +1,267 @@
+#!/usr/bin/env bash
 
+# ========= 颜色 =========
+CYAN=$'\033[1;36m'
+GREEN=$'\033[1;32m'
+YELLOW=$'\033[1;33m'
+GRAY=$'\033[90m'
+RESET=$'\033[0m'
+
+# 非终端输出时不使用颜色
+if [[ ! -t 1 ]]; then
+    CYAN=""
+    GREEN=""
+    YELLOW=""
+    GRAY=""
+    RESET=""
+fi
+
+# ========= 通用界面 =========
+line() {
+    printf '  %s────────────────────────────────────────%s\n' \
+        "$GRAY" "$RESET"
+}
+
+pause() {
+    printf '\n'
+    read -r -p "  按回车返回菜单…" || exit 0
+}
+
+page() {
+    if [[ -t 1 && -n "${TERM:-}" && "$TERM" != "dumb" ]]; then
+        clear
+    fi
+
+    printf '\n  %s%s%s\n' "$CYAN" "$1" "$RESET"
+    line
+}
+
+# ========= 获取公网地址和地区 =========
+load_ip() {
+    PUBLIC_IP="未获取"
+    PUBLIC_IPV6="未获取"
+    IP_REGION="未获取"
+
+    if ! command -v curl >/dev/null 2>&1; then
+        PUBLIC_IP="需要安装 curl"
+        PUBLIC_IPV6="需要安装 curl"
+        return
+    fi
+
+    local result ip country region city extra ipv6
+
+    printf '  正在查询公网地址和地区，请稍候…\n'
+
+    # 通过 IPv4 查询地址和地区
+    result=$(curl -4 -fsS --connect-timeout 3 --max-time 6 \
+        https://ipinfo.io/csv 2>/dev/null)
+
+    IFS=',' read -r ip country region city extra <<< "$result"
+
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        PUBLIC_IP="$ip"
+        IP_REGION="${country:-未知} ${region:-} ${city:-}"
+    fi
+
+    # 地区查询失败时，单独尝试获取 IPv4
+    if [[ "$PUBLIC_IP" == "未获取" ]]; then
+        ip=$(curl -4 -fsS --connect-timeout 3 --max-time 6 \
+            https://api.ipify.org 2>/dev/null)
+
+        if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            PUBLIC_IP="$ip"
+        fi
+    fi
+
+    # 通过 IPv6 查询公网 IPv6
+    ipv6=$(curl -6 -fsS --connect-timeout 3 --max-time 6 \
+        https://api6.ipify.org 2>/dev/null)
+
+    if [[ "$ipv6" == *:* && "$ipv6" =~ ^[0-9a-fA-F:]+$ ]]; then
+        PUBLIC_IPV6="$ipv6"
+    fi
+}
+
+# ========= 系统概览 =========
+show_summary() {
+    local system_name cpu_count memory disk
+
+    system_name="未知 Linux"
+
+    if [[ -r /etc/os-release ]]; then
+        system_name=$(
+            . /etc/os-release
+            printf '%s' "${PRETTY_NAME:-Linux}"
+        )
+    fi
+
+    cpu_count=$(getconf _NPROCESSORS_ONLN 2>/dev/null)
+
+    memory=$(free -m 2>/dev/null |
+        awk '/^Mem:/ {printf "%s / %s MiB", $3, $2}')
+
+    disk=$(df -h / 2>/dev/null |
+        awk 'NR==2 {printf "%s / %s（%s）", $3, $2, $5}')
+
+    printf '  系统      %s\n' "$system_name"
+    printf '  CPU       %s 核\n' "${cpu_count:-未知}"
+    printf '  内存      %s\n' "${memory:-未获取}"
+    printf '  根分区    %s\n' "${disk:-未获取}"
+    printf '  公网 IPv4 %s\n' "$PUBLIC_IP"
+    printf '  公网 IPv6 %s\n' "$PUBLIC_IPV6"
+    printf '  IP 地区   %s\n' "$IP_REGION"
+}
+
+# ========= 系统信息子菜单 =========
+system_menu() {
+    local choice
+
+    while true; do
+        page "工具箱 / 系统信息"
+
+        printf '  %s1%s  系统版本与内核\n' "$GREEN" "$RESET"
+        printf '  %s2%s  CPU 详细信息\n' "$GREEN" "$RESET"
+        printf '  %s3%s  内存使用情况\n' "$GREEN" "$RESET"
+        printf '  %s4%s  磁盘使用情况\n' "$GREEN" "$RESET"
+        printf '  %s5%s  本机网络地址\n' "$GREEN" "$RESET"
+        printf '  %s6%s  刷新公网 IP 和地区\n' "$GREEN" "$RESET"
+        printf '\n  0  返回主菜单\n'
+        line
+
+        read -r -p "  请选择 › " choice || return
+
+        case "$choice" in
+            1)
+                printf '\n'
+                if [[ -r /etc/os-release ]]; then
+                    cat /etc/os-release
+                fi
+                printf '\n内核版本：'
+                uname -r
+                pause
+                ;;
+            2)
+                printf '\n'
+                if command -v lscpu >/dev/null 2>&1; then
+                    lscpu
+                elif [[ -r /proc/cpuinfo ]]; then
+                    cat /proc/cpuinfo
+                else
+                    printf '无法获取 CPU 信息。\n'
+                fi
+                pause
+                ;;
+            3)
+                printf '\n'
+                if command -v free >/dev/null 2>&1; then
+                    free -h
+                else
+                    printf '未找到 free 命令。\n'
+                fi
+                pause
+                ;;
+            4)
+                printf '\n'
+                df -h
+                pause
+                ;;
+            5)
+                printf '\n'
+                if command -v ip >/dev/null 2>&1; then
+                    ip -brief address
+                else
+                    printf '未找到 ip 命令。\n'
+                fi
+                pause
+                ;;
+            6)
+                printf '\n'
+                load_ip
+                printf '\n公网 IPv4：%s\n' "$PUBLIC_IP"
+                printf '公网 IPv6：%s\n' "$PUBLIC_IPV6"
+                printf 'IP 地区：%s\n' "$IP_REGION"
+                pause
+                ;;
+            0)
+                return
+                ;;
+            *)
+                printf '\n  %s选择无效，请重新输入。%s\n' \
+                    "$YELLOW" "$RESET"
+                pause
+                ;;
+        esac
+    done
+}
+
+# ========= 脚本中心子菜单 =========
+script_menu() {
+    local choice
+
+    while true; do
+        page "工具箱 / 脚本中心"
+
+        printf '  %s1%s  sing-box 安装脚本（待接入）\n' \
+            "$GREEN" "$RESET"
+        printf '  %s2%s  测速脚本（待接入）\n' \
+            "$GREEN" "$RESET"
+        printf '  %s3%s  自定义脚本（待接入）\n' \
+            "$GREEN" "$RESET"
+        printf '\n  0  返回主菜单\n'
+        line
+
+        read -r -p "  请选择 › " choice || return
+
+        case "$choice" in
+            1|2|3)
+                printf '\n  %s这个入口尚未接入脚本。%s\n' \
+                    "$YELLOW" "$RESET"
+                pause
+                ;;
+            0)
+                return
+                ;;
+            *)
+                printf '\n  %s选择无效，请重新输入。%s\n' \
+                    "$YELLOW" "$RESET"
+                pause
+                ;;
+        esac
+    done
+}
+
+# ========= 启动 =========
+load_ip
+
+# ========= 主菜单 =========
+while true; do
+    page "VPS TOOLBOX · 服务器工具箱 v0.1"
+
+    show_summary
+    line
+
+    printf '  %s1%s  系统信息  ›\n' "$GREEN" "$RESET"
+    printf '  %s2%s  脚本中心  ›\n' "$GREEN" "$RESET"
+    printf '\n  0  退出工具箱\n'
+    line
+
+    read -r -p "  请选择 › " choice || break
+
+    case "$choice" in
+        1)
+            system_menu
+            ;;
+        2)
+            script_menu
+            ;;
+        0)
+            printf '\n  已退出工具箱。\n\n'
+            break
+            ;;
+        *)
+            printf '\n  %s选择无效，请重新输入。%s\n' \
+                "$YELLOW" "$RESET"
+            pause
+            ;;
+    esac
+done
