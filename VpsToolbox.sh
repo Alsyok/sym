@@ -7,7 +7,6 @@ YELLOW=$'\033[1;33m'
 GRAY=$'\033[90m'
 RESET=$'\033[0m'
 
-# 非终端输出时不使用颜色
 if [[ ! -t 1 ]]; then
     CYAN=""
     GREEN=""
@@ -29,14 +28,14 @@ pause() {
 
 page() {
     if [[ -t 1 && -n "${TERM:-}" && "$TERM" != "dumb" ]]; then
-        clear
+        clear 2>/dev/null
     fi
 
     printf '\n  %s%s%s\n' "$CYAN" "$1" "$RESET"
     line
 }
 
-# ========= 获取公网地址和地区 =========
+# ========= 公网地址和地区 =========
 load_ip() {
     PUBLIC_IP="未获取"
     PUBLIC_IPV6="未获取"
@@ -48,38 +47,44 @@ load_ip() {
         return
     fi
 
-    local result ip country region city extra ipv6
+    local ipv4 ipv6 region family
 
     printf '  正在查询公网地址和地区，请稍候…\n'
 
-    # 通过 IPv4 查询地址和地区
-    result=$(curl -4 -fsS --connect-timeout 3 --max-time 6 \
-        https://ipinfo.io/csv 2>/dev/null)
+    ipv4=$(curl -4 -fsS --connect-timeout 3 --max-time 6 \
+        https://api.ipify.org 2>/dev/null)
 
-    IFS=',' read -r ip country region city extra <<< "$result"
-
-    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        PUBLIC_IP="$ip"
-        IP_REGION="${country:-未知} ${region:-} ${city:-}"
+    if [[ "$ipv4" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        PUBLIC_IP="$ipv4"
     fi
 
-    # 地区查询失败时，单独尝试获取 IPv4
-    if [[ "$PUBLIC_IP" == "未获取" ]]; then
-        ip=$(curl -4 -fsS --connect-timeout 3 --max-time 6 \
-            https://api.ipify.org 2>/dev/null)
-
-        if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            PUBLIC_IP="$ip"
-        fi
-    fi
-
-    # 通过 IPv6 查询公网 IPv6
     ipv6=$(curl -6 -fsS --connect-timeout 3 --max-time 6 \
         https://api6.ipify.org 2>/dev/null)
 
     if [[ "$ipv6" == *:* && "$ipv6" =~ ^[0-9a-fA-F:]+$ ]]; then
         PUBLIC_IPV6="$ipv6"
     fi
+
+    # 查询服务返回纯文本地区信息
+    # 优先通过 IPv4，失败后尝试 IPv6
+    for family in -4 -6; do
+        region=$(curl "$family" -fsS \
+            --connect-timeout 3 --max-time 6 \
+            https://ipinfo.io/region 2>/dev/null) || continue
+
+        region="${region//$'\r'/}"
+
+        # 拒绝空内容、HTML 和 JSON 错误响应
+        if [[ -n "$region" &&
+              ${#region} -le 120 &&
+              "$region" != *$'\n'* &&
+              "$region" != *'<'* &&
+              "$region" != *'{'* &&
+              "$region" != *'}'* ]]; then
+            IP_REGION="$region"
+            break
+        fi
+    done
 }
 
 # ========= 系统概览 =========
@@ -97,11 +102,19 @@ show_summary() {
 
     cpu_count=$(getconf _NPROCESSORS_ONLN 2>/dev/null)
 
+    if [[ -z "$cpu_count" ]] &&
+       command -v nproc >/dev/null 2>&1; then
+        cpu_count=$(nproc 2>/dev/null)
+    fi
+
     memory=$(free -m 2>/dev/null |
         awk '/^Mem:/ {printf "%s / %s MiB", $3, $2}')
 
-    disk=$(df -h / 2>/dev/null |
-        awk 'NR==2 {printf "%s / %s（%s）", $3, $2, $5}')
+    # -P 避免文件系统名称过长导致换行
+    disk=$(df -Ph / 2>/dev/null |
+        awk 'NR==2 && NF>=6 {
+            printf "%s / %s（%s）", $3, $2, $5
+        }')
 
     printf '  系统      %s\n' "$system_name"
     printf '  CPU       %s 核\n' "${cpu_count:-未知}"
@@ -162,13 +175,13 @@ system_menu() {
                 ;;
             4)
                 printf '\n'
-                df -h
+                df -Ph
                 pause
                 ;;
             5)
                 printf '\n'
                 if command -v ip >/dev/null 2>&1; then
-                    ip -brief address
+                    ip address
                 else
                     printf '未找到 ip 命令。\n'
                 fi
@@ -235,7 +248,7 @@ load_ip
 
 # ========= 主菜单 =========
 while true; do
-    page "VPS TOOLBOX · 服务器工具箱 v0.1"
+    page "VPS TOOLBOX · 服务器工具箱 v0.2"
 
     show_summary
     line
